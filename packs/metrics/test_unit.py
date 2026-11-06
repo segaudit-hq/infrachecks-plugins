@@ -1,5 +1,7 @@
 """Unit tests for infrachecks-metrics: python3 test_unit.py"""
-import importlib.machinery, importlib.util, os, unittest
+import importlib.machinery, importlib.util, os, sys, unittest
+
+sys.dont_write_bytecode = True  # keep files/ clean for packaging
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 loader = importlib.machinery.SourceFileLoader(
