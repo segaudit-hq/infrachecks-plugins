@@ -2,15 +2,15 @@
 const { chromium } = require('playwright');
 const shots = require('./shots.json');
 const out = process.argv[2] || 'screenshots';
-const base = `http://localhost:8080/${process.env.CMK_SITE || 'hartwell'}/check_mk/`;
+const base = `http://localhost:8080/${process.env.CMK_SITE || 'wexford'}/check_mk/`;
 
 (async () => {
   require('fs').mkdirSync(out, { recursive: true });
   const browser = await chromium.launch();
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 2 });
   await page.goto(base + 'login.py');
-  await page.fill('input[name=_username]', 'cmkadmin');
-  await page.fill('input[name=_password]', process.env.CMK_PASSWORD || 'labpass123');
+  await page.fill('input[name=_username]', process.env.CMK_USER || 'bob');
+  await page.fill('input[name=_password]', process.env.CMK_PASSWORD || 'wexford-lab-2026');
   await Promise.all([page.waitForNavigation(), page.click('#_login')]);
   for (const s of shots) {
     await page.goto(base + s.path, { waitUntil: 'networkidle' });
