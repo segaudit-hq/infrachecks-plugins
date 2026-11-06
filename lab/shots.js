@@ -2,7 +2,7 @@
 const { chromium } = require('playwright');
 const shots = require('./shots.json');
 const out = process.argv[2] || 'screenshots';
-const base = `http://localhost:8080/${process.env.CMK_SITE || 'ridge'}/check_mk/`;
+const base = `http://localhost:8080/${process.env.CMK_SITE || 'hartwell'}/check_mk/`;
 
 (async () => {
   require('fs').mkdirSync(out, { recursive: true });

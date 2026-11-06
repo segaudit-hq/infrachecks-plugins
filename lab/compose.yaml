@@ -1,13 +1,13 @@
 # Throwaway Checkmk Community lab: one central site plus one remote site.
 # mirror.gcr.io avoids Docker Hub's rate limit on shared cloud IPs.
 services:
-  ridge:
+  hartwell:
     image: mirror.gcr.io/checkmk/check-mk-community:${CMK_VERSION:-2.5.0p17}
     environment:
-      CMK_SITE_ID: ridge
+      CMK_SITE_ID: hartwell
       CMK_PASSWORD: ${CMK_PASSWORD:-labpass123}
     ports: ["8080:5000"]
-    tmpfs: ["/opt/omd/sites/ridge/tmp:uid=1000,gid=1000"]
+    tmpfs: ["/opt/omd/sites/hartwell/tmp:uid=1000,gid=1000"]
   remote1:
     image: mirror.gcr.io/checkmk/check-mk-community:${CMK_VERSION:-2.5.0p17}
     environment:
