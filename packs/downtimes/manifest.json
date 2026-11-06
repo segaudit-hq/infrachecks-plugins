@@ -1,0 +1,15 @@
+{
+  "name": "infrachecks-downtimes",
+  "title": "InfraChecks Downtimes: recurring scheduled downtimes",
+  "version": "1.0.0",
+  "author": "InfraChecks",
+  "description": "Creates recurring scheduled downtimes (weekly, nth weekday of the month, daily or listed dates) from ~/etc/infrachecks/downtimes.ini. Run bin/infrachecks-downtimes hourly as the site user. Uses Livestatus only; no automation user needed. GPLv2.",
+  "download_url": "https://github.com/segaudit-hq/infrachecks-plugins",
+  "version.packaged": "cmk-mkp-tool",
+  "version.min_required": "2.4.0",
+  "version.usable_until": null,
+  "files": {
+    "bin": ["infrachecks-downtimes"],
+    "doc": ["infrachecks-downtimes/downtimes.ini.example"]
+  }
+}

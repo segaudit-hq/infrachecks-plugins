@@ -1,0 +1,32 @@
+name: packs
+on:
+  push:
+  pull_request:
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Unit tests
+        run: |
+          for t in packs/*/test_unit.py; do
+            echo "== $t"; python3 "$t"
+          done
+
+  build:
+    needs: unit
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        pack: [downtimes, metrics, reports]
+        checkmk: [2.4.0-latest, 2.5.0-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build, install and test in a fresh site
+        run: tools/build.sh ${{ matrix.pack }} ${{ matrix.checkmk }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.pack }}-${{ matrix.checkmk }}
+          path: dist/*.mkp

@@ -1,0 +1,11 @@
+# Copy to ~/etc/infrachecks/reports.ini and edit.
+
+[report]
+title = IT availability
+mail_to = it@example.com, finance@example.com
+mail_from = monitoring@example.com
+# A PNG or JPEG for the top left of the PDF, 3:1 works best.
+# logo = /omd/sites/mysite/etc/infrachecks/logo.png
+# Default: /usr/sbin/sendmail, which the site uses for its own
+# notification email.
+# sendmail = /usr/sbin/sendmail

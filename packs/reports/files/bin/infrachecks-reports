@@ -1,0 +1,215 @@
+#!/usr/bin/env python3
+"""infrachecks-reports: monthly availability report as a PDF,
+sent by email. Run it as the site user on the 1st of each month.
+
+  infrachecks-reports                last month, then email it
+  infrachecks-reports 2026-10        a given month
+  infrachecks-reports --no-mail      build the PDF, don't send
+
+Settings: ~/etc/infrachecks/reports.ini and systems.csv (see
+the examples in ~/local/share/doc/check_mk/infrachecks-reports/).
+Each month's figures are kept in ~/var/infrachecks/reports, so
+the 12-month column never re-reads old monitoring history.
+Part of InfraChecks, GPLv2: github.com/segaudit-hq/infrachecks-plugins
+"""
+import configparser, csv, datetime as dt, glob, html, json, os
+import re, socket, subprocess, sys, time
+from email.message import EmailMessage
+
+PLAIN = re.compile(r"[^\x00-\x1f\x7f]*")  # one Livestatus value
+
+
+def lq(root, query):
+    with socket.socket(socket.AF_UNIX) as s:
+        s.connect(f"{root}/tmp/run/live")
+        s.sendall(f"{query}OutputFormat: json\n\n".encode())
+        s.shutdown(socket.SHUT_WR)
+        return json.loads(b"".join(iter(lambda: s.recv(65536),
+                                        b"")))
+
+
+def month(arg, today):
+    """First day, start and end timestamps of a YYYY-MM month
+    (default: the month before today)."""
+    if arg:
+        first = dt.date.fromisoformat(arg + "-01")
+    else:
+        first = (today.replace(day=1) - dt.timedelta(1)).replace(
+            day=1)
+    nxt = (first + dt.timedelta(32)).replace(day=1)
+    ts = lambda d: int(time.mktime(d.timetuple()))
+    return first, ts(first), min(ts(nxt), int(time.time()))
+
+
+def tally(rows, is_host, shifts_only):
+    """Availability from statehist rows. Downtime counts as
+    planned, unmonitored time and time outside shifts are left
+    out, and WARN counts as up for services."""
+    up_states = (0,) if is_host else (0, 1)
+    t = dict(up=0, down=0, planned=0, unmonitored=0)
+    for state, secs, in_dt, in_host_dt, in_period in rows:
+        if shifts_only and not in_period:
+            continue
+        if state == -1:
+            t["unmonitored"] += secs
+        elif in_dt or in_host_dt:
+            t["planned"] += secs
+        elif state in up_states:
+            t["up"] += secs
+        else:
+            t["down"] += secs
+    counted = t["up"] + t["down"]
+    pct = 100 * t["up"] / counted if counted else None
+    return pct, {k: round(v / 60) for k, v in t.items()}
+
+
+def systems(path):
+    try:
+        rows = list(csv.DictReader(open(path)))
+    except OSError:
+        sys.exit(f"no systems list: create {path}")
+    for n, r in enumerate(rows, start=2):
+        try:
+            target = float(r["target"])
+            ok = (0 <= target <= 100 and r["hours"] in
+                  ("24x7", "shifts") and r["name"] and r["host"]
+                  and all(PLAIN.fullmatch(r[k]) for k in
+                          ("name", "host", "service")))
+        except (KeyError, TypeError, ValueError):
+            ok = False
+        if not ok:
+            sys.exit(f"{path} line {n}: need name, host, service, "
+                     "target (0-100) and hours (24x7 or shifts)")
+    return rows
+
+
+def measure(root, rows, start, end):
+    out = []
+    for r in rows:
+        hist = lq(root, "GET statehist\n"
+                  "Columns: state duration in_downtime "
+                  "in_host_downtime in_notification_period\n"
+                  f"Filter: time >= {start}\nFilter: time < {end}\n"
+                  f"Filter: host_name = {r['host']}\n"
+                  f"Filter: service_description = {r['service']}\n")
+        pct, minutes = tally(hist, r["service"] == "",
+                             r["hours"] == "shifts")
+        target = float(r["target"])
+        out.append({"name": r["name"], "target": target,
+                    "availability": pct, "minutes": minutes,
+                    "met": None if pct is None else pct >= target})
+    return out
+
+
+def fmt(p):
+    return "no data" if p is None else f"{p:.2f}%"
+
+
+def table_rows(months):
+    this = months[-1]
+    rows = [["System", "This month", "Target", "Last 12 mo."]]
+    for s in this["systems"]:
+        vals = [x["availability"] for m in months
+                for x in m["systems"] if x["name"] == s["name"]
+                and x["availability"] is not None]
+        avg = sum(vals) / len(vals) if vals else None
+        rows.append([s["name"], fmt(s["availability"]),
+                     f"{s['target']:g}%", fmt(avg)])
+    return rows
+
+
+def pdf(path, title, logo, this, rows):
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import letter
+    from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.platypus import (Image, Paragraph,
+        SimpleDocTemplate, Spacer, Table, TableStyle)
+    style = getSampleStyleSheet()
+    story = []
+    if logo and os.path.exists(logo):
+        story.append(Image(logo, width=120, height=40,
+                           hAlign="LEFT"))
+    when = dt.datetime.strptime(this["month"], "%Y-%m")
+    story += [Paragraph(html.escape(f"{title}, {when:%B %Y}"),
+                        style["Title"]),
+              Paragraph("Planned downtime is excluded. Systems "
+                        "measured in shift hours count only their "
+                        "notification period.", style["Normal"]),
+              Spacer(1, 12)]
+    table = Table(rows, hAlign="LEFT")
+    cmds = [("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+            ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey)]
+    for i, s in enumerate(this["systems"], start=1):
+        if s["met"] is False:  # missed its target: red row
+            cmds.append(("TEXTCOLOR", (0, i), (-1, i), colors.red))
+    table.setStyle(TableStyle(cmds))
+    story.append(table)
+    SimpleDocTemplate(path, pagesize=letter).build(story)
+
+
+def mail(cfg, path, title, this, rows):
+    missed = [s for s in this["systems"] if s["met"] is False]
+    msg = EmailMessage()
+    msg["Subject"] = (f"{title} {this['month']}: "
+                      + (f"{len(missed)} below target" if missed
+                         else "all targets met"))
+    msg["From"], msg["To"] = cfg["mail_from"], cfg["mail_to"]
+    msg.set_content(f"{title} for {this['month']} is attached "
+                    "as a PDF.")
+    cells = "".join("<tr>" + "".join(
+        f"<td>{html.escape(c)}</td>" for c in r) + "</tr>"
+        for r in rows)
+    msg.add_alternative(f"<p>{html.escape(title)}, "
+                        f"{this['month']}</p><table border=1>"
+                        f"{cells}</table>", subtype="html")
+    with open(path, "rb") as f:
+        msg.add_attachment(f.read(), maintype="application",
+                           subtype="pdf",
+                           filename=os.path.basename(path))
+    subprocess.run([cfg.get("sendmail", "/usr/sbin/sendmail"),
+                    "-t"], input=msg.as_bytes(), check=True)
+
+
+def main(argv):
+    root = os.environ.get("OMD_ROOT") or sys.exit(
+        "run this as the site user")
+    etc, out = f"{root}/etc/infrachecks", f"{root}/var/infrachecks/reports"
+    ini = configparser.ConfigParser(interpolation=None)
+    ini.read(f"{etc}/reports.ini")
+    cfg = ini["report"] if "report" in ini else {}
+    no_mail = "--no-mail" in argv
+    if not no_mail and not (cfg.get("mail_to")
+                            and cfg.get("mail_from")):
+        sys.exit(f"set mail_to and mail_from in [report] in "
+                 f"{etc}/reports.ini, or use --no-mail")
+    args = [a for a in argv if not a.startswith("--")]
+    try:
+        first, start, end = month(args[0] if args else None,
+                                  dt.date.today())
+    except ValueError:
+        sys.exit("give the month as YYYY-MM")
+    this = {"month": first.strftime("%Y-%m"),
+            "generated": int(time.time()),
+            "systems": measure(root, systems(f"{etc}/systems.csv"),
+                               start, end)}
+    os.makedirs(out, exist_ok=True)
+    with open(f"{out}/avail-{this['month']}.json", "w") as f:
+        json.dump(this, f, indent=1)
+    files = [p for p in sorted(glob.glob(f"{out}/avail-*.json"))
+             if p[-12:-5] <= this["month"]]
+    months = [json.load(open(p)) for p in files[-12:]]
+    rows = table_rows(months)
+    title = cfg.get("title", "IT availability")
+    path = f"{out}/availability-{this['month']}.pdf"
+    pdf(path, title, cfg.get("logo"), this, rows)
+    for r in rows[1:]:
+        print(f"{r[0]:<28} {r[1]:>9}  target {r[2]}")
+    if no_mail:
+        print(f"wrote {path} (not sent)")
+    else:
+        mail(cfg, path, title, this, rows)
+        print(f"sent {path} to {cfg['mail_to']}")
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])

@@ -1,0 +1,16 @@
+{
+  "name": "infrachecks-reports",
+  "title": "InfraChecks Reports: monthly availability PDF by email",
+  "version": "1.0.0",
+  "author": "InfraChecks",
+  "description": "Measures monthly availability for the systems listed in ~/etc/infrachecks/systems.csv from Livestatus state history, excluding planned downtime, with optional shift-hours measurement. Builds a PDF with this month, the target and a 12-month average, and emails it. Run bin/infrachecks-reports on the 1st of each month as the site user. GPLv2.",
+  "download_url": "https://github.com/segaudit-hq/infrachecks-plugins",
+  "version.packaged": "cmk-mkp-tool",
+  "version.min_required": "2.4.0",
+  "version.usable_until": null,
+  "files": {
+    "bin": ["infrachecks-reports"],
+    "doc": ["infrachecks-reports/reports.ini.example",
+            "infrachecks-reports/systems.csv.example"]
+  }
+}

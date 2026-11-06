@@ -1,0 +1,15 @@
+{
+  "name": "infrachecks-metrics",
+  "title": "InfraChecks Metrics: export metrics as InfluxDB line protocol",
+  "version": "1.0.0",
+  "author": "InfraChecks",
+  "description": "Sends every new service metric from Livestatus to InfluxDB, VictoriaMetrics or any InfluxDB line protocol endpoint, configured in ~/etc/infrachecks/metrics.ini. Run bin/infrachecks-metrics every minute as the site user. GPLv2.",
+  "download_url": "https://github.com/segaudit-hq/infrachecks-plugins",
+  "version.packaged": "cmk-mkp-tool",
+  "version.min_required": "2.4.0",
+  "version.usable_until": null,
+  "files": {
+    "bin": ["infrachecks-metrics"],
+    "doc": ["infrachecks-metrics/metrics.ini.example"]
+  }
+}

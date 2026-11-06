@@ -1,0 +1,5 @@
+name,host,service,target,hours
+ERP application,erp01,ERP Web,99.9,24x7
+ERP database,erpdb01,,99.9,24x7
+Label printing,print01,,99.5,shifts
+File server,fs01,,99.5,24x7

@@ -1,0 +1,41 @@
+# Copy to ~/etc/infrachecks/downtimes.ini and edit.
+# Each section is one recurring window. Section names use
+# letters, digits, dots, dashes and underscores.
+#
+#   hosts    host names, or group:NAME for a host group
+#   every    daily, sunday, 2nd tuesday, last friday ...
+#   dates    or a list of dates instead of every
+#   start    local start time, HH:MM
+#   minutes  length of the window
+#   skip     dates on which this window doesn't happen
+#   comment  shown on the downtime (default: the section name)
+#
+# To cancel one occurrence, add its date to skip. Deleting the
+# downtime in the GUI doesn't work: the next run recreates it.
+
+[settings]
+# Default: the server's own time zone.
+# timezone = America/New_York
+# How far ahead to create downtimes, in hours.
+# ahead_hours = 36
+
+[linux-patching]
+hosts = group:linux-patch-sunday
+every = sunday
+start = 02:00
+minutes = 120
+comment = Linux patching
+
+[windows-patching]
+hosts = group:windows-servers
+every = 2nd tuesday
+start = 20:00
+minutes = 240
+skip = 2026-12-08
+
+[plant-shutdown]
+hosts = group:plant-floor
+dates = 2027-06-28
+start = 06:00
+minutes = 10080
+comment = Plant shutdown week

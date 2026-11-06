@@ -1,0 +1,180 @@
+#!/usr/bin/env python3
+"""infrachecks-downtimes: recurring scheduled downtimes from a
+schedule file. Run it as the site user every hour. It never
+creates the same downtime twice, so extra runs are harmless.
+
+  infrachecks-downtimes            create the downtimes due
+  infrachecks-downtimes --dry-run  only show what it would do
+
+Schedule: ~/etc/infrachecks/downtimes.ini (see the example in
+~/local/share/doc/check_mk/infrachecks-downtimes/).
+Part of InfraChecks, GPLv2: github.com/segaudit-hq/infrachecks-plugins
+"""
+import configparser, datetime as dt, os, re, socket, sys, time
+from zoneinfo import ZoneInfo
+
+AUTHOR = "infrachecks-downtimes"
+DAYS = ["monday", "tuesday", "wednesday", "thursday",
+        "friday", "saturday", "sunday"]
+NTH = {"1st": 1, "2nd": 2, "3rd": 3, "4th": 4, "5th": 5,
+       "last": -1}
+PLAIN = re.compile(r"[^\x00-\x1f\x7f;]+")  # one Livestatus field
+
+
+class Bad(Exception):
+    pass
+
+
+def parse_every(rule):
+    """'daily', 'sunday', '2nd tuesday' or 'last friday'."""
+    words = rule.lower().split()
+    if words == ["daily"]:
+        return None, None
+    if len(words) == 1 and words[0] in DAYS:
+        return None, DAYS.index(words[0])
+    if len(words) == 2 and words[0] in NTH and words[1] in DAYS:
+        return NTH[words[0]], DAYS.index(words[1])
+    raise Bad(f"every = {rule!r}: use daily, a day name, or "
+              "1st/2nd/3rd/4th/5th/last plus a day name")
+
+
+def matches(day, rule):
+    nth, weekday = parse_every(rule)
+    if weekday is None:
+        return True
+    if day.weekday() != weekday:
+        return False
+    if nth is None:
+        return True
+    if nth == -1:
+        return (day + dt.timedelta(7)).month != day.month
+    return (day.day - 1) // 7 + 1 == nth
+
+
+def entry(name, sec):
+    """Check one schedule section; return it as a dict."""
+    for key in ("hosts", "start", "minutes"):
+        if key not in sec:
+            raise Bad(f"[{name}] needs {key} =")
+    if ("every" in sec) == ("dates" in sec):
+        raise Bad(f"[{name}] needs either every = or dates =")
+    try:
+        hh, mm = map(int, sec["start"].split(":"))
+        start = dt.time(hh, mm)
+        minutes = int(sec["minutes"])
+        dates = [dt.date.fromisoformat(d)
+                 for d in sec.get("dates", "").split()]
+        skip = [dt.date.fromisoformat(d)
+                for d in sec.get("skip", "").split()]
+    except ValueError as e:
+        raise Bad(f"[{name}] {e}")
+    if not 1 <= minutes <= 60 * 24 * 31:
+        raise Bad(f"[{name}] minutes must be 1 to 44640")
+    if "every" in sec:
+        parse_every(sec["every"])
+    if not re.fullmatch(r"[\w.-]+", name):
+        raise Bad(f"[{name}] names use letters, digits, . - _")
+    targets = sec["hosts"].split()
+    comment = sec.get("comment", name)
+    for value in targets + [comment]:
+        if not PLAIN.fullmatch(value):
+            raise Bad(f"[{name}] {value!r}: no semicolons or "
+                      "control characters")
+    return dict(name=name, targets=targets, start=start,
+                minutes=minutes, every=sec.get("every"),
+                dates=dates, skip=skip, comment=comment)
+
+
+def occurrences(e, now, ahead, tz):
+    """(start, end) of windows that are running or due soon.
+    With no time zone set, the server's local time is used."""
+    days = [now.date() + dt.timedelta(d) for d in range(-31, 3)]
+    for d in days:
+        if e["dates"] and d not in e["dates"]:
+            continue
+        if e["every"] and not matches(d, e["every"]):
+            continue
+        if d in e["skip"]:
+            continue
+        start = dt.datetime.combine(d, e["start"], tz)
+        if tz is None:  # the right UTC offset for that date
+            start = start.astimezone()
+        end = start + dt.timedelta(minutes=e["minutes"])
+        if end > now and start < now + ahead:
+            yield max(start, now), end
+
+
+def live(query):
+    path = f"{os.environ['OMD_ROOT']}/tmp/run/live"
+    with socket.socket(socket.AF_UNIX) as s:
+        s.connect(path)
+        s.sendall(query.encode())
+        s.shutdown(socket.SHUT_WR)
+        return b"".join(iter(lambda: s.recv(65536), b"")).decode()
+
+
+def main(argv):
+    if "OMD_ROOT" not in os.environ:
+        sys.exit("run this as the site user")
+    dry = "--dry-run" in argv
+    conf = f"{os.environ['OMD_ROOT']}/etc/infrachecks/downtimes.ini"
+    plan = configparser.ConfigParser(interpolation=None)
+    if not plan.read(conf):
+        sys.exit(f"no schedule: create {conf}")
+    settings = plan["settings"] if "settings" in plan else {}
+    try:
+        tz = (ZoneInfo(settings["timezone"])
+              if settings.get("timezone") else None)
+        ahead = dt.timedelta(
+            hours=int(settings.get("ahead_hours", "36")))
+        entries = [entry(n, plan[n]) for n in plan.sections()
+                   if n != "settings"]
+    except (Bad, ValueError, KeyError) as e:
+        sys.exit(f"{conf}: {e}")
+
+    have = set(live("GET downtimes\nColumns: comment\n"
+                    "Filter: comment ~ ^\\[sched:\n").split("\n"))
+    have = {c.split()[0] for c in have if c}
+    hosts = set(live("GET hosts\nColumns: name\n").split())
+    groups = set(live("GET hostgroups\nColumns: name\n"
+                      "Filter: num_hosts > 0\n").split())
+    missing = sorted({t for e in entries for t in e["targets"]
+                      if (t[6:] not in groups if t.startswith(
+                          "group:") else t not in hosts)})
+    for t in missing:
+        print(f"skipped {t}: not on this site, or an empty group",
+              file=sys.stderr)
+    now = dt.datetime.now(tz).astimezone(tz)
+    new = 0
+    for e in entries:
+        e["targets"] = [t for t in e["targets"] if t not in missing]
+        if not e["targets"]:
+            continue
+        for start, end in occurrences(e, now, ahead, tz):
+            tag = f"[sched:{e['name']}:{end:%Y%m%d%H%M}]"
+            if tag in have:
+                continue
+            new += 1
+            print(f"{e['name']}: {start:%a %Y-%m-%d %H:%M} to "
+                  f"{end:%a %Y-%m-%d %H:%M} on "
+                  + " ".join(e["targets"]))
+            if dry:
+                continue
+            s, t = int(start.timestamp()), int(end.timestamp())
+            for target in e["targets"]:
+                if target.startswith("group:"):
+                    cmd = "SCHEDULE_HOSTGROUP_HOST_DOWNTIME"
+                    target = target[6:]
+                else:
+                    cmd = "SCHEDULE_HOST_DOWNTIME"
+                live(f"COMMAND [{int(time.time())}] {cmd};"
+                     f"{target};{s};{t};1;0;{t - s};{AUTHOR};"
+                     f"{tag} {e['comment']}\n")
+    print(f"{new} new downtime windows"
+          + (" (dry run, nothing created)" if dry else ""))
+    if missing:  # so mk-job shows the schedule needs fixing
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])
