@@ -1,0 +1,5 @@
+[
+  { "name": "host-services", "path": "view.py?view_name=host&host=lab-linux-01" },
+  { "name": "all-hosts", "path": "view.py?view_name=allhosts" },
+  { "name": "setup-hosts", "path": "wato.py?mode=folder" }
+]
