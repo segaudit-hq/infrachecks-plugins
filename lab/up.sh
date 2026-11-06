@@ -19,7 +19,10 @@ for site in wexford:8080 remote1:8081; do
 done
 
 # Agent: install the site's own package and query it directly instead of over TCP.
-docker compose exec -T wexford bash -c 'dpkg -i /omd/sites/wexford/share/check_mk/agents/check-mk-agent_*_all.deb >/dev/null'
+# It runs as the site user, so its OMD sections' 7 "su" calls always fail (no sudo here), and su
+# sleeps FAIL_DELAY (1s) after each: zero it so a check takes ~2s, not ~8.6s, with the same output.
+docker compose exec -T wexford bash -c 'dpkg -i /omd/sites/wexford/share/check_mk/agents/check-mk-agent_*_all.deb >/dev/null
+  grep -q "^FAIL_DELAY" /etc/login.defs || echo "FAIL_DELAY 0" >> /etc/login.defs'
 docker compose exec -T -u wexford wexford bash -c 'cat > ~/etc/check_mk/conf.d/lab-agent.mk' <<'MK'
 datasource_programs = [{"id": "lab-agent", "condition": {}, "value": "/usr/bin/check_mk_agent"}] + datasource_programs
 MK
